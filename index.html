@@ -1,0 +1,1977 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HRV Tuner</title>
+<meta name="description" content="Resonance breathing pacer with live heart-rate coherence from a Bluetooth chest strap.">
+<meta name="theme-color" content="#07080C">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2307080C'/%3E%3Ccircle cx='32' cy='32' r='23' fill='none' stroke='%23ffffff' stroke-opacity='.2' stroke-width='2'/%3E%3Ccircle cx='32' cy='32' r='13' fill='%235AC8E0'/%3E%3C/svg%3E">
+<style>
+/* Colours, sizes and spacing are taken from the macOS app (Theme.swift,
+   BreatheView.swift, BreathOrb.swift, ContentView.swift, AnalyzeView.swift). */
+:root {
+  --bg: #07080C;
+  --bg-lift: #0B0C11;
+  --surface: #0E1016;
+  --hairline: rgba(255, 255, 255, .075);
+  --text: #E8EAF0;
+  --text2: #8A90A0;
+  --text3: #565C6B;
+  --inhale: #5AC8E0;
+  --exhale: #7FD4B0;
+  --hold: #AAA5E6;
+  --empty: #656D82;
+  --good: #71D79D;
+  --warn: #E0A85A;
+  --bad: #E0685A;
+  --hr: #E57173;
+  --ui: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* SF Pro Rounded: built into Safari as ui-rounded; Chrome/Edge/Arc use it when
+     Apple's SF Pro Rounded font is installed. */
+  --display: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: var(--bg); }
+body {
+  color: var(--text);
+  font: 400 13px var(--ui);
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px solid var(--text2); outline-offset: 2px; }
+[hidden] { display: none !important; }
+
+.app { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
+.num { font-family: var(--display); font-variant-numeric: tabular-nums; }
+.field-label {
+  font: 600 10.5px var(--ui);
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+
+.sf-rounded .num { letter-spacing: .5px; }
+.sf-rounded .coh-num { letter-spacing: .34px; }
+.sf-rounded .phase .rem { position: relative; top: 1px; }
+
+/* ---------- Header ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 52px;
+  padding: 0 18px;
+  flex: none;
+}
+.divider { height: 1px; background: rgba(255, 255, 255, .165); flex: none; }
+
+.link { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11.5px; white-space: nowrap; }
+.dot { width: 7px; height: 7px; margin-bottom: 1px; border-radius: 50%; background: var(--bad); flex: none; }
+.dot.on { background: var(--good); }
+.link-text { color: var(--warn); overflow: hidden; text-overflow: ellipsis; }
+.link-text, .link button, .link .mid, .pinfo span { padding-bottom: 2px; }
+.native-rounded .link-text, .native-rounded .link button, .native-rounded .link .mid, .native-rounded .pinfo span { padding-bottom: 1px; }
+.link-text.on { color: var(--text2); }
+.link button { color: var(--warn); font-size: 11.5px; }
+.link button.quiet { color: var(--text3); }
+.link button:hover { color: var(--text); }
+.link .mid { color: var(--text3); }
+
+.sep { width: 1px; height: 16px; background: var(--hairline); flex: none; }
+.pinfo { display: flex; align-items: center; gap: 8px; white-space: nowrap; min-width: 0; }
+.pinfo .rate { font-size: 11.5px; color: var(--text); }
+.pinfo .timing { font: 400 11.5px var(--mono); color: var(--text3); overflow: hidden; text-overflow: ellipsis; }
+.spacer { flex: 1; min-width: 12px; }
+
+.timer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  flex: none;
+}
+.timer.done { border-color: rgba(113, 215, 157, .4); }
+.play {
+  width: 22px;
+  height: 20px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .10);
+  display: grid;
+  place-items: center;
+}
+.play svg { display: block; fill: var(--text); }
+.clock { width: 46px; font-size: 13px; font-weight: 500; color: var(--text2); }
+.timer.running .clock { color: var(--text); }
+.timer.done .clock { color: var(--good); }
+.prog { position: relative; width: 58px; height: 3px; border-radius: 1.5px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.prog i { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 1.5px; background: rgba(90, 200, 224, .75); }
+.timer.done .prog i { background: var(--good); }
+.target { position: relative; padding-bottom: 1px; font-size: 11.5px; color: var(--text3); }
+.target select {
+  position: absolute;
+  inset: -6px -4px;
+  opacity: 0;
+  cursor: pointer;
+  font-size: 13px;
+}
+.target:hover { color: var(--text2); }
+
+.modes {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  padding: 1px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  flex: none;
+}
+.modes button {
+  height: 24px;
+  padding: 0 11px 2px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: var(--text2);
+}
+.native-rounded .modes button { padding-bottom: 1px; }
+.modes button.on { background: rgba(255, 255, 255, .10); color: var(--text); font-weight: 600; }
+
+/* ---------- Breathe ---------- */
+
+main { flex: 1; min-height: 0; position: relative; }
+.breathe {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.grow { flex: 1 1 0; min-height: 8px; }
+.orb { display: block; flex: none; overflow: visible; }
+.orb .track { fill: none; stroke: rgba(255, 255, 255, .08); stroke-width: 1; }
+.orb .arc { fill: none; stroke-width: 2; stroke-opacity: .5; stroke-linecap: butt; transition: stroke .8s ease-in-out; }
+.orb .disc { transition: fill .8s ease-in-out; }
+.orb .tick { stroke: #fff; stroke-linecap: butt; }
+
+.phase { display: flex; align-items: center; gap: 12px; margin-top: 14px; height: 17px; flex: none; }
+.phase .seg { font-size: 14px; font-weight: 500; letter-spacing: 3.4px; text-transform: uppercase; color: var(--text); }
+.phase .seg.swap { animation: fadein .4s ease-in-out; }
+.phase .rem { font-size: 14px; color: var(--text3); }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+
+.coh { display: flex; flex-direction: column; align-items: center; padding-bottom: 22px; flex: none; }
+.coh-num {
+  position: relative;
+  height: 69px;
+  font-size: 58px;
+  font-weight: 600;
+  line-height: 69px;
+  color: var(--text3);
+  transition: color .4s ease-out;
+  white-space: nowrap;
+}
+.coh-num .ch { display: inline-block; position: relative; }
+.coh-num .ch.in { animation: roll-in .4s ease-out both; }
+.coh-num .ch .out {
+  position: absolute;
+  left: 0;
+  top: 0;
+  animation: roll-out .4s ease-out both;
+  pointer-events: none;
+}
+@keyframes roll-in {
+  from { transform: translateY(.42em) scale(.9); opacity: 0; filter: blur(3px); }
+  to { transform: none; opacity: 1; filter: blur(0); }
+}
+@keyframes roll-out {
+  from { transform: none; opacity: 1; filter: blur(0); }
+  to { transform: translateY(-.42em) scale(.9); opacity: 0; filter: blur(3px); }
+}
+.coh .field-label { color: var(--text2); margin-top: 5px; line-height: 13px; }
+.native-rounded .coh .field-label { margin-top: 6px; }
+.meter { position: relative; width: 232px; height: 10px; margin-top: 4.5px; }
+.native-rounded .meter { margin-top: 5px; }
+.meter .trk { position: absolute; inset: 0; border-radius: 5px; background: rgba(255, 255, 255, .07); }
+.meter .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-radius: 5px;
+  background: var(--text3);
+  opacity: .85;
+  transition: width .5s ease-out, background-color .5s ease-out;
+}
+.meter .notch { position: absolute; left: 197.2px; top: 0; width: 1.5px; height: 10px; background: rgba(255, 255, 255, .35); }
+.coh .hint { height: 14px; margin-top: 7px; font-size: 11.5px; line-height: 14px; color: var(--text3); }
+
+/* ---------- Analyze ---------- */
+
+.analyze { position: absolute; inset: 0; overflow-y: auto; padding: 14px; }
+.cols { display: flex; gap: 12px; align-items: flex-start; }
+.col-left { width: 286px; flex: none; display: flex; flex-direction: column; gap: 12px; }
+.col-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.panel { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; padding: 13px; }
+
+.pacer-panel { display: flex; flex-direction: column; align-items: center; }
+.pacer-panel .seg { margin-top: 10px; font-size: 11px; font-weight: 500; letter-spacing: 2.4px; text-transform: uppercase; transition: color .8s ease-in-out; }
+.pacer-panel .rate { margin-top: 2px; font-size: 15px; font-weight: 500; }
+.pacer-panel .timing { margin-top: 2px; font: 400 11.5px var(--mono); color: var(--text3); }
+
+.settings { width: 100%; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 10px; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; }
+.set-row .k { font-size: 13px; color: var(--text2); }
+.stepper { display: flex; align-items: center; gap: 8px; }
+.stepper button {
+  width: 26px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .09);
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text);
+}
+.stepper .v { min-width: 34px; text-align: center; font-size: 13px; }
+.choice { display: flex; gap: 2px; padding: 1px; border: 1px solid var(--hairline); border-radius: 8px; background: var(--bg-lift); }
+.choice button { height: 24px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; color: var(--text2); }
+.choice button.on { background: rgba(255, 255, 255, .10); color: var(--text); font-weight: 600; }
+.vol { display: flex; align-items: center; gap: 8px; }
+.vol .v { width: 22px; font-size: 11px; color: var(--text3); }
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 120px;
+  height: 18px;
+  background: none;
+  cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 1.5px;
+  background: linear-gradient(to right, var(--text2) 0 var(--p, 80%), rgba(255, 255, 255, .12) var(--p, 80%) 100%);
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border-radius: 50%;
+  background: var(--text);
+}
+input[type=range]::-moz-range-track { height: 3px; border-radius: 1.5px; background: rgba(255, 255, 255, .12); }
+input[type=range]::-moz-range-progress { height: 3px; border-radius: 1.5px; background: var(--text2); }
+input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--text); }
+.textbtn { font-size: 11.5px; color: var(--text2); align-self: flex-start; }
+.textbtn:hover { color: var(--text); }
+
+.metrics .field-label { display: block; margin-bottom: 9px; }
+.mrow { display: flex; align-items: center; justify-content: space-between; padding: 3.5px 0; }
+.mrow .k { font-size: 13px; color: var(--text2); }
+.mrow .v { font-size: 13px; color: var(--text); }
+.mrow .v.em { font-size: 15px; font-weight: 600; color: var(--inhale); }
+.mdiv { height: 1px; background: var(--hairline); margin: 9px 0; }
+
+.chart-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; min-width: 0; }
+.chart-head .field-label { color: var(--text2); white-space: nowrap; }
+.chart-head .hint { font-size: 10px; color: var(--text3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart { display: block; width: 100%; height: 122px; }
+
+/* ---------- Narrow screens ---------- */
+
+@media (max-width: 760px) {
+  .bar {
+    flex-wrap: wrap;
+    height: auto;
+    padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+    row-gap: 10px;
+    column-gap: 12px;
+  }
+  .sep { display: none; }
+  .link { order: 1; flex: 1 1 0; }
+  .modes { order: 2; }
+  .spacer { order: 3; flex-basis: 100%; min-width: 0; height: 0; }
+  .pinfo { order: 4; flex: 1 1 0; }
+  .timer { order: 5; }
+  .coh { padding-bottom: calc(22px + env(safe-area-inset-bottom)); }
+  .analyze { padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); }
+  .cols { flex-direction: column; }
+  .col-left, .col-right { width: 100%; }
+}
+@media (max-width: 430px) {
+  .pinfo .timing { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <div class="link" id="link">
+      <span class="dot" id="dot"></span>
+      <span class="link-text" id="linkText"></span>
+      <span class="mid" id="sep1" hidden>·</span>
+      <button id="connectBtn" type="button" hidden>Connect heart strap</button>
+      <span class="mid" id="sep2" hidden>·</span>
+      <button id="demoBtn" class="quiet" type="button" hidden>Demo</button>
+    </div>
+    <span class="sep"></span>
+    <div class="pinfo">
+      <span class="rate" id="hdrRate"></span>
+      <span class="timing" id="hdrTiming"></span>
+    </div>
+    <div class="spacer"></div>
+    <div class="timer" id="timer">
+      <button class="play" id="playBtn" type="button" aria-label="Start session" title="Start session (space)">
+        <svg id="playIcon" width="9" height="10" viewBox="0 0 9 10"></svg>
+      </button>
+      <span class="clock num" id="clock">30:00</span>
+      <span class="prog"><i id="progFill"></i></span>
+      <span class="target"><span id="targetLabel">30m</span>
+        <select id="targetSel" aria-label="Session length">
+          <option value="600">10 min</option>
+          <option value="1200">20 min</option>
+          <option value="1800">30 min</option>
+          <option value="2700">45 min</option>
+          <option value="3600">60 min</option>
+          <option value="reset">Reset</option>
+        </select>
+      </span>
+    </div>
+    <nav class="modes" aria-label="Mode">
+      <button type="button" class="on" data-mode="breathe">Breathe</button>
+      <button type="button" data-mode="analyze">Analyze</button>
+    </nav>
+  </header>
+  <div class="divider"></div>
+
+  <main>
+    <section class="breathe" id="breathe">
+      <div class="grow"></div>
+      <svg class="orb" id="orb" aria-hidden="true">
+        <circle class="track"></circle>
+        <g class="ticks"></g>
+        <circle class="arc"></circle>
+        <circle class="disc"></circle>
+      </svg>
+      <div class="phase">
+        <span class="seg" id="seg">Inhale</span>
+        <span class="rem num" id="rem">0.0</span>
+      </div>
+      <div class="grow"></div>
+      <div class="coh">
+        <div class="coh-num num" id="cohNum"></div>
+        <div class="field-label">Coherence</div>
+        <div class="meter">
+          <div class="trk"></div>
+          <div class="fill" id="cohFill"></div>
+          <div class="notch"></div>
+        </div>
+        <div class="hint" id="cohHint">collecting beats…</div>
+      </div>
+    </section>
+
+    <section class="analyze" id="analyze" hidden>
+      <div class="cols">
+        <div class="col-left">
+          <div class="panel pacer-panel">
+            <svg class="orb" id="orbSmall" aria-hidden="true">
+              <circle class="track"></circle>
+              <g class="ticks"></g>
+              <circle class="arc"></circle>
+              <circle class="disc"></circle>
+            </svg>
+            <div class="seg" id="ppSeg">Inhale</div>
+            <div class="rate num" id="ppRate"></div>
+            <div class="timing" id="ppTiming"></div>
+            <div class="settings">
+              <div class="set-row">
+                <span class="k">Rate</span>
+                <div class="stepper">
+                  <button type="button" id="rateDown" aria-label="Slower">−</button>
+                  <span class="v num" id="rateVal"></span>
+                  <button type="button" id="rateUp" aria-label="Faster">+</button>
+                </div>
+              </div>
+              <div class="set-row">
+                <span class="k">In : out</span>
+                <div class="choice" id="ratioChoice">
+                  <button type="button" data-v="1:1">1:1</button>
+                  <button type="button" data-v="1:1.5">1:1.5</button>
+                  <button type="button" data-v="1:2">1:2</button>
+                </div>
+              </div>
+              <div class="set-row">
+                <span class="k">Tone</span>
+                <div class="choice" id="toneChoice">
+                  <button type="button" data-v="low" title="55–82 Hz (needs headphones or real bass)">Deep</button>
+                  <button type="button" data-v="mid" title="110–165 Hz">Mid</button>
+                  <button type="button" data-v="high" title="220–330 Hz (laptop speakers)">High</button>
+                </div>
+              </div>
+              <div class="set-row">
+                <span class="k">Volume</span>
+                <div class="vol">
+                  <input type="range" id="vol" min="0" max="100" step="1" aria-label="Volume">
+                  <span class="v num" id="volVal"></span>
+                </div>
+              </div>
+              <button type="button" class="textbtn" id="resetDefaults">Reset to 4.5 bpm · 1:1 · Deep</button>
+            </div>
+          </div>
+
+          <div class="panel metrics">
+            <span class="field-label">Live metrics</span>
+            <div class="mrow"><span class="k">Coherence</span><span class="v em num" id="mCoh">—</span></div>
+            <div class="mrow"><span class="k">RSA swing</span><span class="v num" id="mRsa">—</span></div>
+            <div class="mrow"><span class="k">Your rate</span><span class="v num" id="mPeak">—</span></div>
+            <div class="mrow"><span class="k">Lock</span><span class="v num" id="mLock">—</span></div>
+            <div class="mrow"><span class="k">Phase lag</span><span class="v num" id="mPhase">—</span></div>
+            <div class="mdiv"></div>
+            <div class="mrow"><span class="k">HR</span><span class="v num" id="mHr">—</span></div>
+            <div class="mrow"><span class="k">RMSSD</span><span class="v num" id="mRmssd">—</span></div>
+            <div class="mrow"><span class="k">SDNN</span><span class="v num" id="mSdnn">—</span></div>
+          </div>
+        </div>
+
+        <div class="col-right">
+          <div class="panel">
+            <div class="chart-head">
+              <span class="field-label">Breath vs heart rate</span>
+              <span class="hint">at resonance the line rides the shaded hump — no lag</span>
+            </div>
+            <canvas class="chart" id="chartHR"></canvas>
+          </div>
+          <div class="panel">
+            <div class="chart-head">
+              <span class="field-label">Coherence</span>
+              <span class="hint">last 10 min · dashed line is the 85 target</span>
+            </div>
+            <canvas class="chart" id="chartCoh"></canvas>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script id="engine">
+/* ENGINE START */
+// Line-by-line port of the macOS app's analysis code (Spectrum.swift,
+// CoherenceAnalyzer.swift, HRVAnalyzer.swift, PacerConfig.swift,
+// HeartSimulator.swift, BLEManager.swift parsing). Same constants, same order of
+// operations, so the numbers match the desktop app. All times are epoch seconds.
+const Engine = (() => {
+  'use strict';
+
+  // ---------- Spectrum ----------
+
+  function nextPow2(n) {
+    if (n <= 1) return 1;
+    let p = 1;
+    while (p < n) p <<= 1;
+    return p;
+  }
+
+  // In-place iterative radix-2 FFT. re/im must be the same power-of-two length.
+  function fft(re, im) {
+    const n = re.length;
+    if (n <= 1 || (n & (n - 1)) !== 0 || im.length !== n) return;
+    let j = 0;
+    for (let i = 1; i < n; i++) {
+      let bit = n >> 1;
+      while (j & bit) { j ^= bit; bit >>= 1; }
+      j |= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2.0 * Math.PI / len;
+      const half = len / 2;
+      for (let i = 0; i < n; i += len) {
+        for (let k = 0; k < half; k++) {
+          const a = ang * k;
+          const wr = Math.cos(a), wi = Math.sin(a);
+          const ur = re[i + k], ui = im[i + k];
+          const vrRaw = re[i + k + half], viRaw = im[i + k + half];
+          const vr = wr * vrRaw - wi * viRaw;
+          const vi = wr * viRaw + wi * vrRaw;
+          re[i + k] = ur + vr;
+          im[i + k] = ui + vi;
+          re[i + k + half] = ur - vr;
+          im[i + k + half] = ui - vi;
+        }
+      }
+    }
+  }
+
+  // Welch PSD: symmetric Hann segments, 50% overlap, per-segment mean removal.
+  function welch(series, fs, maxSeg = 256, nfftIn = null) {
+    const n = series.length;
+    if (n < 32 || !(fs > 0)) return null;
+    const seg = Math.min(maxSeg, n);
+    if (seg < 2) return null;
+    const step = Math.max(1, Math.floor(seg / 2));
+
+    const win = new Float64Array(seg);
+    for (let i = 0; i < seg; i++) win[i] = 0.5 - 0.5 * Math.cos(2.0 * Math.PI * i / (seg - 1));
+    let winPow = 0;
+    for (let i = 0; i < seg; i++) winPow = winPow + win[i] * win[i];
+    if (!(winPow > 0)) return null;
+
+    let nfft = nfftIn ?? Math.max(256, nextPow2(seg));
+    if (nfft < seg || (nfft & (nfft - 1)) !== 0) nfft = Math.max(256, nextPow2(Math.max(seg, nfft)));
+
+    const half = nfft / 2 + 1;
+    const accum = new Float64Array(half);
+    let nseg = 0;
+    for (let start = 0; start + seg <= n; start += step) {
+      let mean = 0;
+      for (let i = 0; i < seg; i++) mean += series[start + i];
+      mean /= seg;
+      const re = new Float64Array(nfft), im = new Float64Array(nfft);
+      for (let i = 0; i < seg; i++) re[i] = (series[start + i] - mean) * win[i];
+      fft(re, im);
+      for (let k = 0; k < half; k++) accum[k] += re[k] * re[k] + im[k] * im[k];
+      nseg += 1;
+    }
+    if (nseg === 0) return null;
+
+    const denom = nseg * fs * winPow;
+    const freqs = new Float64Array(half), power = new Float64Array(half);
+    for (let k = 0; k < half; k++) {
+      freqs[k] = k * fs / nfft;
+      power[k] = accum[k] / denom;
+    }
+    return { freqs, power };
+  }
+
+  // Trapezoid integral of the PSD over [lo, hi] Hz.
+  function bandPower(psd, lo, hi) {
+    const idx = [];
+    for (let i = 0; i < psd.freqs.length; i++) {
+      const f = psd.freqs[i];
+      if (f >= lo && f <= hi) idx.push(i);
+    }
+    if (idx.length < 2) return 0;
+    let sum = 0;
+    for (let k = 1; k < idx.length; k++) {
+      const a = idx[k - 1], b = idx[k];
+      sum += (psd.power[a] + psd.power[b]) * 0.5 * (psd.freqs[b] - psd.freqs[a]);
+    }
+    return sum;
+  }
+
+  // Highest PSD bin within [lo, hi] Hz.
+  function peak(psd, lo, hi) {
+    let best = null;
+    for (let i = 0; i < psd.freqs.length; i++) {
+      const f = psd.freqs[i];
+      if (f >= lo && f <= hi && (best === null || psd.power[i] > best.power)) {
+        best = { hz: f, power: psd.power[i] };
+      }
+    }
+    return best;
+  }
+
+  // Linear interpolation onto grid, clamped outside the sample range (np.interp).
+  function interpolate(grid, xs, ys) {
+    const out = new Float64Array(grid.length);
+    if (xs.length < 2 || xs.length !== ys.length) {
+      out.fill(ys.length ? ys[0] : 0);
+      return out;
+    }
+    const firstX = xs[0], lastX = xs[xs.length - 1];
+    const firstY = ys[0], lastY = ys[ys.length - 1];
+    let j = 0;
+    for (let i = 0; i < grid.length; i++) {
+      const g = grid[i];
+      if (g <= firstX) { out[i] = firstY; continue; }
+      if (g >= lastX) { out[i] = lastY; continue; }
+      while (j + 1 < xs.length && xs[j + 1] < g) j += 1;
+      const x0 = xs[j], x1 = xs[j + 1];
+      const span = x1 - x0;
+      out[i] = span <= 0 ? ys[j] : ys[j] + (ys[j + 1] - ys[j]) * (g - x0) / span;
+    }
+    return out;
+  }
+
+  // ---------- Pacer ----------
+
+  // Breath cycle: inhale -> hold (full) -> exhale -> hold (empty).
+  class Pacer {
+    constructor({ bpm, inhaleSec, holdSec = 0, exhaleSec, holdEmptySec = 0, startedAt = 0 }) {
+      this.bpm = bpm;
+      this.inhaleSec = inhaleSec;
+      this.holdSec = holdSec;
+      this.exhaleSec = exhaleSec;
+      this.holdEmptySec = holdEmptySec;
+      this.startedAt = startedAt;
+    }
+
+    get period() { return this.inhaleSec + this.holdSec + this.exhaleSec + this.holdEmptySec; }
+
+    phase(now) {
+      const period = this.period;
+      const elapsed = Math.max(0, now - this.startedAt);
+      const p = (elapsed % period) / period;
+      const inFrac = this.inhaleSec / period;
+      const holdFrac = this.holdSec / period;
+      const exFrac = this.exhaleSec / period;
+      if (p < inFrac) return { phase: p, segment: 'Inhale' };
+      if (p < inFrac + holdFrac) return { phase: p, segment: 'Hold' };
+      if (p < inFrac + holdFrac + exFrac) return { phase: p, segment: 'Exhale' };
+      return { phase: p, segment: 'Empty' };
+    }
+
+    // 0..1: rises over the inhale, 1 while holding full, falls over the exhale, 0 while empty.
+    envelope(now) {
+      const period = this.period;
+      const elapsed = Math.max(0, now - this.startedAt);
+      const p = (elapsed % period) / period;
+      const inFrac = this.inhaleSec / period;
+      const holdFrac = this.holdSec / period;
+      const exFrac = this.exhaleSec / period;
+      if (p < inFrac) return 0.5 - 0.5 * Math.cos(Math.PI * p / inFrac);
+      if (p < inFrac + holdFrac) return 1.0;
+      if (p < inFrac + holdFrac + exFrac) {
+        const q = (p - inFrac - holdFrac) / exFrac;
+        return 0.5 + 0.5 * Math.cos(Math.PI * q);
+      }
+      return 0.0;
+    }
+
+    // Seconds left in the current segment.
+    remaining(now) {
+      const period = this.period;
+      if (!(period > 0)) return 0;
+      const p = Math.max(0, now - this.startedAt) % period;
+      const bounds = [this.inhaleSec, this.inhaleSec + this.holdSec,
+        this.inhaleSec + this.holdSec + this.exhaleSec, period];
+      for (const b of bounds) if (p < b) return b - p;
+      return 0;
+    }
+  }
+
+  // ---------- Coherence ----------
+
+  function emptySnapshot() {
+    return {
+      ok: false, peakHz: 0, peakBpm: 0, peakPower: 0,
+      lfPower: 0, hfPower: 0, totalPower: 0, lfhf: 0,
+      coherence: 0, lock: 0, hasTarget: false, rsaAmplitudeBpm: 0,
+      phaseLagDeg: 0, phaseTracking: 0, hasPhase: false,
+    };
+  }
+
+  // Centered boxcar, edge-clamped so the output keeps the input's length.
+  function movingAverage(x, width) {
+    if (!(width > 1) || !(x.length > width)) return x;
+    const half = Math.floor(width / 2);
+    const out = new Float64Array(x.length);
+    for (let i = 0; i < x.length; i++) {
+      const lo = Math.max(0, i - half);
+      const hi = Math.min(x.length - 1, i + half);
+      let sum = 0;
+      for (let j = lo; j <= hi; j++) sum += x[j];
+      out[i] = sum / (hi - lo + 1);
+    }
+    return out;
+  }
+
+  class CoherenceAnalyzer {
+    constructor() {
+      this.windowSeconds = 60;
+      this.historyMinutes = 10;
+      this.fs = 4.0;
+      this.nfft = 1024;
+      this.peakLo = 0.04; this.peakHi = 0.26;
+      this.bandLo = 0.04; this.bandHi = 0.40;
+      this.beats = [];
+      this.beatClock = null;
+      this.pacer = null;
+      this.snap = emptySnapshot();
+      this.history = [];
+      this.overlay = [];
+    }
+
+    setPacer(p) { this.pacer = p; }
+
+    reset() {
+      this.beats = [];
+      this.beatClock = null;
+      this.snap = emptySnapshot();
+      this.overlay = [];
+    }
+
+    // A strap packs several RR values into one notification, so beats are
+    // timed by a running beat clock (t += rr), resynced to the wall clock
+    // when it drifts more than 5 s.
+    add(rr, now) {
+      if (!(rr >= 0.3 && rr <= 2.0)) return;
+      let t;
+      if (this.beatClock !== null && Math.abs(this.beatClock + rr - now) < 5.0) t = this.beatClock + rr;
+      else t = now;
+      this.beatClock = t;
+      this.beats.push({ t, rr });
+      const cutoff = now - this.windowSeconds - 30;
+      if (this.beats.length && this.beats[0].t < cutoff) this.beats = this.beats.filter(b => !(b.t < cutoff));
+    }
+
+    recompute(end) {
+      const start = end - this.windowSeconds;
+      const win = this.beats.filter(b => b.t >= start && b.t <= end);
+      if (win.length < 12) {
+        if (this.snap.ok) this.snap = emptySnapshot();
+        this.overlay = [];
+        return this.snap;
+      }
+
+      // Resample onto an even 4 Hz grid. Each RR is placed at its interval's
+      // midpoint, which is where the rate it describes belongs.
+      const fs = this.fs;
+      const n = Math.trunc(this.windowSeconds * fs);
+      const grid = new Float64Array(n);
+      for (let i = 0; i < n; i++) grid[i] = start + i / fs;
+      const ts = win.map(b => b.t - b.rr / 2.0);
+      const rrMs = win.map(b => b.rr * 1000.0);
+      const hrBpm = win.map(b => 60.0 / b.rr);
+      const rrSeries = interpolate(grid, ts, rrMs);
+      const hrSeries = interpolate(grid, ts, hrBpm);
+
+      const out = emptySnapshot();
+      const cfg = this.pacer;
+
+      const psd = welch(rrSeries, fs, 256, this.nfft);
+      const pk = psd ? peak(psd, this.peakLo, this.peakHi) : null;
+      if (psd && pk) {
+        out.ok = true;
+        out.peakHz = pk.hz;
+        out.peakBpm = pk.hz * 60.0;
+        out.peakPower = pk.power;
+        out.lfPower = bandPower(psd, 0.04, 0.15);
+        out.hfPower = bandPower(psd, 0.15, 0.40);
+        out.totalPower = bandPower(psd, this.bandLo, this.bandHi);
+        out.lfhf = out.hfPower > 1e-12 ? out.lfPower / out.hfPower : 0;
+
+        // Coherence = share of 0.04-0.40 Hz power inside the peak's main lobe
+        // (half-width 2/T for a Hann segment of duration T).
+        const segDur = Math.min(256, n) / fs;
+        const halfWidth = segDur > 0 ? 2.0 / segDur : 0.033;
+        const inPeak = bandPower(psd, Math.max(this.bandLo, pk.hz - halfWidth),
+          Math.min(this.bandHi, pk.hz + halfWidth));
+        out.coherence = out.totalPower > 1e-12 ? Math.min(1.0, inPeak / out.totalPower) : 0;
+
+        if (cfg && cfg.period > 0) {
+          const targetHz = cfg.bpm / 60.0;
+          const sigma = 0.012;
+          out.lock = Math.exp(-Math.pow(pk.hz - targetHz, 2) / (2 * sigma * sigma));
+          out.hasTarget = true;
+        }
+      }
+
+      let cycleSec = 0;
+      if (cfg && cfg.period > 0.5) cycleSec = cfg.period;
+      else if (out.peakHz > 0.01) cycleSec = 1.0 / out.peakHz;
+      out.rsaAmplitudeBpm = this.rsaAmplitude(hrSeries, cycleSec);
+
+      let breathSeries = null;
+      if (cfg && cfg.period > 0.5) {
+        const env = new Float64Array(n);
+        for (let i = 0; i < n; i++) env[i] = cfg.envelope(grid[i]);
+        breathSeries = env;
+        const lag = this.bestLag(env, hrSeries, cfg.period);
+        if (lag) {
+          out.phaseLagDeg = lag.lagSec / cfg.period * 360.0;
+          out.phaseTracking = lag.corr;
+          out.hasPhase = true;
+        }
+      }
+
+      this.snap = out;
+
+      this.history.push({ t: end, coherence: out.coherence });
+      const hCut = end - this.historyMinutes * 60;
+      if (this.history[0].t < hCut) this.history = this.history.filter(h => !(h.t < hCut));
+
+      const pts = [];
+      for (let i = 0; i < n; i += 2) {
+        pts.push({ t: grid[i], hr: hrSeries[i], breath: breathSeries ? breathSeries[i] : null });
+      }
+      this.overlay = pts;
+      return out;
+    }
+
+    // Mean peak-to-trough HR swing over the last few whole breath cycles,
+    // smoothed first so beat-to-beat jitter doesn't inflate it.
+    rsaAmplitude(hr, cycleSec) {
+      if (!(cycleSec > 1.0) || hr.length === 0) return 0;
+      const fs = this.fs;
+      const perCycle = Math.round(cycleSec * fs);
+      if (perCycle < 4 || hr.length < perCycle) return 0;
+      const smooth = movingAverage(hr, Math.max(3, Math.round(cycleSec * fs / 8)));
+      const amps = [];
+      let upper = smooth.length;
+      while (upper - perCycle >= 0 && amps.length < 4) {
+        let lo = Infinity, hi = -Infinity;
+        for (let i = upper - perCycle; i < upper; i++) {
+          if (smooth[i] < lo) lo = smooth[i];
+          if (smooth[i] > hi) hi = smooth[i];
+        }
+        amps.push(hi - lo);
+        upper -= perCycle;
+      }
+      if (!amps.length) return 0;
+      let sum = 0;
+      for (const a of amps) sum += a;
+      return sum / amps.length;
+    }
+
+    // Normalised cross-correlation of breath envelope vs HR over +-half a
+    // period. Positive lag = HR trails the breath.
+    bestLag(breath, hr, period) {
+      if (breath.length !== hr.length || !(breath.length > 8)) return null;
+      const n = breath.length;
+      const fs = this.fs;
+      let bSum = 0, hSum = 0;
+      for (let i = 0; i < n; i++) bSum += breath[i];
+      for (let i = 0; i < n; i++) hSum += hr[i];
+      const bMean = bSum / n, hMean = hSum / n;
+      const b = new Float64Array(n), h = new Float64Array(n);
+      for (let i = 0; i < n; i++) b[i] = breath[i] - bMean;
+      for (let i = 0; i < n; i++) h[i] = hr[i] - hMean;
+      let bSq = 0, hSq = 0;
+      for (let i = 0; i < n; i++) bSq = bSq + b[i] * b[i];
+      for (let i = 0; i < n; i++) hSq = hSq + h[i] * h[i];
+      const bNorm = Math.sqrt(bSq), hNorm = Math.sqrt(hSq);
+      if (!(bNorm > 1e-9) || !(hNorm > 1e-9)) return null;
+
+      const maxLag = Math.min(n - 4, Math.round(period / 2.0 * fs));
+      if (maxLag < 1) return null;
+
+      let bestCorr = -2.0, bestShift = 0;
+      for (let shift = -maxLag; shift <= maxLag; shift++) {
+        let sum = 0, count = 0;
+        for (let i = 0; i < n; i++) {
+          const j = i + shift;
+          if (j < 0 || j >= n) continue;
+          sum += b[i] * h[j];
+          count += 1;
+        }
+        if (!(count > Math.floor(n / 2))) continue;
+        const corr = sum / (bNorm * hNorm) * (n / count);
+        if (corr > bestCorr) { bestCorr = corr; bestShift = shift; }
+      }
+      if (!(bestCorr > -1.5)) return null;
+      return { lagSec: bestShift / fs, corr: Math.max(0, Math.min(1, bestCorr)) };
+    }
+  }
+
+  // ---------- Time-domain HRV ----------
+
+  class HRVAnalyzer {
+    constructor() {
+      this.windowSeconds = 60;
+      this.historyMinutes = 10;
+      this.samples = [];
+      this.rmssd = 0; this.sdnn = 0; this.meanRR = 0; this.bpm = 0; this.pnn50 = 0;
+      this.sampleCount = 0;
+      this.metricsHistory = [];
+      this.lastSnapshotAt = -Infinity;
+    }
+
+    add(rr, now) {
+      if (!(rr >= 0.3 && rr <= 2.0)) return;
+      this.samples.push({ t: now, rr });
+      if (now - this.samples[0].t > this.windowSeconds) {
+        this.samples = this.samples.filter(s => !(now - s.t > this.windowSeconds));
+      }
+      this.recompute();
+      if (now - this.lastSnapshotAt >= 1.0) {
+        this.lastSnapshotAt = now;
+        this.metricsHistory.push({ t: now, hr: this.bpm, rmssd: this.rmssd, sdnn: this.sdnn });
+        const cut = now - this.historyMinutes * 60;
+        if (this.metricsHistory[0].t < cut) this.metricsHistory = this.metricsHistory.filter(m => !(m.t < cut));
+      }
+    }
+
+    reset() {
+      this.samples = [];
+      this.rmssd = 0; this.sdnn = 0; this.meanRR = 0; this.bpm = 0; this.pnn50 = 0;
+      this.sampleCount = 0;
+    }
+
+    recompute() {
+      const rrs = this.samples.map(s => s.rr);
+      this.sampleCount = rrs.length;
+      if (rrs.length < 4) return;
+      let sumSq = 0, hits = 0;
+      for (let i = 1; i < rrs.length; i++) {
+        const d = (rrs[i] - rrs[i - 1]) * 1000.0;
+        sumSq += d * d;
+        if (Math.abs(d) > 50) hits += 1;
+      }
+      this.rmssd = Math.sqrt(sumSq / (rrs.length - 1));
+      this.pnn50 = hits / (rrs.length - 1);
+      let sum = 0;
+      for (const r of rrs) sum = sum + r;
+      const mean = sum / rrs.length;
+      this.meanRR = mean;
+      this.bpm = 60.0 / mean;
+      let v = 0;
+      for (const r of rrs) v = v + Math.pow((r - mean) * 1000.0, 2);
+      this.sdnn = Math.sqrt(v / rrs.length);
+    }
+  }
+
+  // ---------- Simulated heart (demo mode) ----------
+
+  // Heart rate follows the pacer envelope: a perfect breather, so coherence
+  // should climb toward 100 and phase toward 0 within about a minute.
+  class HeartSimulator {
+    constructor({ baseHR = 62, ampHR = 7, lagDeg = 0, noiseMs = 3 } = {}) {
+      this.baseHR = baseHR;
+      this.ampHR = ampHR;
+      this.lagDeg = lagDeg;
+      this.noiseSec = noiseMs / 1000.0;
+    }
+
+    // RR for the interval starting at `now`, solved at the interval's midpoint.
+    nextRR(pacer, now, random = Math.random) {
+      let rr = 60.0 / this.baseHR;
+      for (let k = 0; k < 3; k++) {
+        let env = 0.5;
+        if (pacer && pacer.period > 0.5) {
+          const lagSec = this.lagDeg / 360.0 * pacer.period;
+          env = pacer.envelope(now + rr / 2 - lagSec);
+        }
+        rr = 60.0 / Math.max(30.0, this.baseHR + this.ampHR * (2 * env - 1));
+      }
+      const jitter = this.noiseSec > 0 ? (random() * 2 - 1) * this.noiseSec : 0;
+      return Math.min(1.9, Math.max(0.35, rr + jitter));
+    }
+  }
+
+  // ---------- Bluetooth Heart Rate Measurement (0x2A37) ----------
+
+  // Returns { hr, rrs } with RR in seconds, or null for a short packet.
+  function parseHeartRate(dv) {
+    if (dv.byteLength < 2) return null;
+    const flags = dv.getUint8(0);
+    const is16Bit = (flags & 0x01) !== 0;
+    const hasRR = (flags & 0x10) !== 0;
+    const hasEE = (flags & 0x08) !== 0;
+    let idx = 1;
+    let hr;
+    if (is16Bit) {
+      if (dv.byteLength < idx + 2) return null;
+      hr = dv.getUint8(idx) | (dv.getUint8(idx + 1) << 8);
+      idx += 2;
+    } else {
+      hr = dv.getUint8(idx);
+      idx += 1;
+    }
+    if (hasEE) idx += 2;
+    const rrs = [];
+    if (hasRR) {
+      while (idx + 1 < dv.byteLength) {
+        rrs.push((dv.getUint8(idx) | (dv.getUint8(idx + 1) << 8)) / 1024.0);
+        idx += 2;
+      }
+    }
+    return { hr, rrs };
+  }
+
+  return {
+    nextPow2, fft, welch, bandPower, peak, interpolate,
+    Pacer, CoherenceAnalyzer, HRVAnalyzer, HeartSimulator, parseHeartRate, emptySnapshot,
+  };
+})();
+
+if (typeof module !== 'undefined') module.exports = Engine;
+/* ENGINE END */
+</script>
+
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const now = () => (performance.timeOrigin + performance.now()) / 1000;
+
+// ---------- Settings ----------
+
+const DEFAULTS = { bpm: 4.5, ratio: '1:1', tone: 'low', volume: 0.8, target: 1800 };
+const INHALE_SHARE = { '1:1': 1 / 2, '1:1.5': 1 / 2.5, '1:2': 1 / 3 };
+const TONES = { low: [55, 82], mid: [110, 165], high: [220, 330] };
+const STORE_KEY = 'hrvtuner.settings';
+
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { saved = {}; }
+  const s = { ...DEFAULTS, ...saved };
+  if (!(s.bpm >= 3 && s.bpm <= 8)) s.bpm = DEFAULTS.bpm;
+  if (!(s.ratio in INHALE_SHARE)) s.ratio = DEFAULTS.ratio;
+  if (!(s.tone in TONES)) s.tone = DEFAULTS.tone;
+  if (!(s.volume >= 0 && s.volume <= 1)) s.volume = DEFAULTS.volume;
+  if (![600, 1200, 1800, 2700, 3600].includes(s.target)) s.target = DEFAULTS.target;
+  return s;
+}
+function saveSettings() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (e) { /* private mode */ }
+}
+const settings = loadSettings();
+
+// ---------- Pacer ----------
+
+function pacerShape() {
+  const period = 60 / settings.bpm;
+  const inhale = period * INHALE_SHARE[settings.ratio];
+  return { bpm: settings.bpm, inhaleSec: inhale, holdSec: 0, exhaleSec: period - inhale, holdEmptySec: 0 };
+}
+
+let pacer = new Engine.Pacer({ ...pacerShape(), startedAt: now() });
+
+// A new rate or ratio keeps the current breath phase instead of snapping back
+// to the start of an inhale (same rule as the desktop app's pacer watcher).
+function applyPacerShape() {
+  const t = now();
+  const oldPhase = pacer.phase(t).phase;
+  const shape = pacerShape();
+  const period = shape.inhaleSec + shape.exhaleSec;
+  pacer = new Engine.Pacer({ ...shape, startedAt: t - oldPhase * period });
+  coh.setPacer(pacer);
+  sound.setPacer();
+  drawTicks();
+  renderPacerText();
+}
+
+const fmt = {
+  one: x => x.toFixed(1),
+  two: x => x.toFixed(2),
+  pct: x => String(Math.round(x * 100)),
+  clock: sec => {
+    const s = Math.max(0, Math.floor(sec));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  },
+  timings: p => `in ${p.inhaleSec.toFixed(1)} · out ${p.exhaleSec.toFixed(1)} s`,
+};
+
+const TINT = { Inhale: '#5AC8E0', Hold: '#AAA5E6', Exhale: '#7FD4B0', Empty: '#656D82' };
+
+// ---------- Analysis ----------
+
+const coh = new Engine.CoherenceAnalyzer();
+const hrv = new Engine.HRVAnalyzer();
+coh.setPacer(pacer);
+let heartRate = 0;
+
+function onRR(rr, t) {
+  hrv.add(rr, t);
+  coh.add(rr, t);
+}
+
+// ---------- Sound: one pacer tone, same synth as the desktop app ----------
+// The tone glides from the low to the high frequency while you inhale and back
+// down while you exhale, with its volume following the orb.
+
+const SYNTH_SRC = `
+class PacerSynth extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.cfg = null;
+    this.breathPhase = 0;
+    this.tonePhase = 0;
+    this.port.onmessage = e => {
+      if (e.data.cfg) this.cfg = e.data.cfg;
+      if (typeof e.data.phase === 'number') this.breathPhase = e.data.phase;
+    };
+  }
+  process(inputs, outputs) {
+    const out = outputs[0];
+    const cfg = this.cfg;
+    const n = out[0].length;
+    if (!cfg) { for (const ch of out) ch.fill(0); return true; }
+    const dt = 1 / sampleRate;
+    const period = Math.max(0.5, cfg.period);
+    const iF = cfg.inhale / period, hF = cfg.hold / period, eF = cfg.exhale / period;
+    const lo = cfg.freqLo, hi = cfg.freqHi, peak = 0.25;
+    for (let f = 0; f < n; f++) {
+      this.breathPhase += dt / period;
+      if (this.breathPhase >= 1) this.breathPhase -= 1;
+      const bp = this.breathPhase;
+      let env, freq;
+      if (bp < iF) {
+        env = 0.5 - 0.5 * Math.cos(Math.PI * bp / iF);
+        freq = lo + (hi - lo) * (bp / iF);
+      } else if (bp < iF + hF) {
+        env = 1; freq = hi;
+      } else if (bp < iF + hF + eF) {
+        const q = (bp - iF - hF) / Math.max(0.001, eF);
+        env = 0.5 + 0.5 * Math.cos(Math.PI * q);
+        freq = hi - (hi - lo) * q;
+      } else {
+        env = 0; freq = lo;
+      }
+      this.tonePhase += 2 * Math.PI * freq * dt;
+      if (this.tonePhase > 2 * Math.PI) this.tonePhase -= 2 * Math.PI;
+      const s = Math.sin(this.tonePhase) * env * peak;
+      for (const ch of out) ch[f] = s;
+    }
+    return true;
+  }
+}
+registerProcessor('pacer-synth', PacerSynth);
+`;
+
+const sound = {
+  ctx: null,
+  node: null,
+  fade: null,
+  vol: null,
+  ready: null,
+  playing: false,
+  suspendTimer: 0,
+
+  // Must run inside the click handler: browsers only allow audio to start from a user gesture.
+  init() {
+    if (this.ctx) return this.ready;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return Promise.resolve(false);
+    this.ctx = new AC();
+    // iPhone: play through the ringer switch (iOS 17+).
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) { /* older iOS */ }
+    this.fade = this.ctx.createGain();
+    this.fade.gain.value = 0;
+    this.vol = this.ctx.createGain();
+    this.vol.gain.value = settings.volume;
+    this.fade.connect(this.vol).connect(this.ctx.destination);
+    const url = URL.createObjectURL(new Blob([SYNTH_SRC], { type: 'application/javascript' }));
+    this.ready = this.ctx.audioWorklet.addModule(url).then(() => {
+      this.node = new AudioWorkletNode(this.ctx, 'pacer-synth', { numberOfInputs: 0, outputChannelCount: [2] });
+      this.node.connect(this.fade);
+      this.setPacer();
+      return true;
+    }).catch(err => { console.warn('pacer sound unavailable', err); return false; });
+    return this.ready;
+  },
+
+  // Send the pacer shape and the phase the listener will hear, so the tone
+  // lines up with the orb on screen.
+  setPacer() {
+    if (!this.node) return;
+    const [lo, hi] = TONES[settings.tone];
+    const latency = (this.ctx.baseLatency || 0) + (this.ctx.outputLatency || 0);
+    this.node.port.postMessage({
+      cfg: { period: pacer.period, inhale: pacer.inhaleSec, hold: pacer.holdSec, exhale: pacer.exhaleSec, freqLo: lo, freqHi: hi },
+      phase: pacer.phase(now() + latency).phase,
+    });
+  },
+
+  setTone() { this.setPacer(); },
+
+  setVolume(v) {
+    if (this.vol) this.vol.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  },
+
+  // Fade in now and fade out on its own at the end of the session, scheduled
+  // on the audio clock so it still ends on time in a background tab.
+  async start(remainingSec) {
+    // Resume before any await: Safari only allows it inside the click/keypress itself.
+    const ready = this.init();
+    if (this.ctx && this.ctx.state !== 'running') this.ctx.resume();
+    const ok = await ready;
+    if (!ok || !this.ctx) return;
+    clearTimeout(this.suspendTimer);
+    this.setPacer();
+    const g = this.fade.gain;
+    const t = this.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(0, t);
+    g.linearRampToValueAtTime(1, t + 0.6);
+    const end = t + Math.max(0.7, remainingSec);
+    const fadeOut = Math.min(3, Math.max(0.1, remainingSec - 0.7));
+    g.setValueAtTime(1, end - fadeOut);
+    g.linearRampToValueAtTime(0, end);
+    this.playing = true;
+  },
+
+  stop(fadeSec = 0.6) {
+    this.playing = false;
+    if (!this.ctx || !this.fade) return;
+    const g = this.fade.gain;
+    const t = this.ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + fadeSec);
+    clearTimeout(this.suspendTimer);
+    this.suspendTimer = setTimeout(() => {
+      if (!this.playing && this.ctx.state === 'running') this.ctx.suspend();
+    }, fadeSec * 1000 + 200);
+  },
+};
+
+// ---------- Session timer ----------
+
+const timer = {
+  running: false,
+  accumulated: 0,
+  startedAt: 0,
+  get target() { return settings.target; },
+  elapsed(t) { return this.accumulated + (this.running ? t - this.startedAt : 0); },
+  remaining(t) { return Math.max(0, this.target - this.elapsed(t)); },
+  progress(t) { return this.target > 0 ? Math.min(1, this.elapsed(t) / this.target) : 0; },
+  done(t) { return this.elapsed(t) >= this.target; },
+};
+
+let wakeLock = null;
+async function holdScreenOn(on) {
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch (e) { wakeLock = null; }
+}
+
+// A fresh session starts on an inhale; the orb eases into it.
+let blend = null;
+function startSession() {
+  const t = now();
+  if (timer.done(t)) timer.accumulated = 0;
+  if (timer.accumulated === 0) {
+    blend = { from: shownEnv, until: t + 0.5 };
+    pacer = new Engine.Pacer({ ...pacerShape(), startedAt: t });
+    coh.setPacer(pacer);
+  }
+  timer.running = true;
+  timer.startedAt = t;
+  sound.start(timer.remaining(t));
+  holdScreenOn(true);
+  renderTimer(t);
+}
+
+function pauseSession() {
+  const t = now();
+  timer.accumulated = Math.min(timer.target, timer.elapsed(t));
+  timer.running = false;
+  sound.stop();
+  holdScreenOn(false);
+  renderTimer(t);
+}
+
+function finishSession() {
+  timer.accumulated = timer.target;
+  timer.running = false;
+  sound.stop(0.3);
+  holdScreenOn(false);
+  renderTimer(now());
+}
+
+function resetSession() {
+  timer.accumulated = 0;
+  timer.running = false;
+  sound.stop();
+  holdScreenOn(false);
+  renderTimer(now());
+}
+
+function toggleSession() {
+  if (timer.running) pauseSession();
+  else startSession();
+}
+
+// ---------- Heart strap (Web Bluetooth) ----------
+
+const link = {
+  state: 'idle',          // idle | connecting | streaming | lost | demo | unsupported
+  device: null,
+  name: '',
+  retry: 0,
+  retryTimer: 0,
+  demo: null,
+};
+
+// What the header shows for each state:
+//   idle / lost-final: [Connect heart strap] · [Demo]
+//   unsupported:       Bluetooth needs Chrome, Edge or Arc · [Demo]
+//   demo:              Simulated heart · [Connect strap]
+//   otherwise:         device name or connection status
+function renderLink() {
+  const s = link.state;
+  const on = s === 'streaming' || s === 'demo';
+  const canConnect = 'bluetooth' in navigator;
+  const showText = !(s === 'idle' || s === 'lost-final');
+  const showConnect = canConnect && (s === 'idle' || s === 'lost-final' || s === 'demo');
+  const showDemo = s === 'idle' || s === 'lost-final' || s === 'unsupported';
+  $('dot').classList.toggle('on', on);
+  const text = $('linkText');
+  text.classList.toggle('on', on);
+  text.hidden = !showText;
+  $('connectBtn').hidden = !showConnect;
+  $('connectBtn').textContent = s === 'demo' ? 'Connect strap' : 'Connect heart strap';
+  $('demoBtn').hidden = !showDemo;
+  $('sep1').hidden = !(showText && (showConnect || showDemo));
+  $('sep2').hidden = !(showConnect && showDemo);
+  if (s === 'streaming') text.textContent = link.name || 'Connected';
+  else if (s === 'connecting') text.textContent = `Connecting to ${link.name || 'strap'}…`;
+  else if (s === 'lost') text.textContent = 'Disconnected — reconnecting…';
+  else if (s === 'demo') text.textContent = 'Simulated heart';
+  else if (s === 'unsupported') text.textContent = 'Bluetooth needs Chrome, Edge or Arc';
+  updateCohHint();
+}
+
+async function connectStrap() {
+  try {
+    const device = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
+    await attach(device);
+  } catch (e) {
+    if (e && e.name !== 'NotFoundError') console.warn(e);
+    if (link.state === 'connecting') { link.state = 'idle'; renderLink(); }
+  }
+}
+
+function clearAnalysis() {
+  coh.reset();
+  hrv.reset();
+  heartRate = 0;
+}
+
+async function attach(device) {
+  if (link.demo) clearAnalysis();
+  stopDemo();
+  link.device = device;
+  link.name = device.name || 'Heart strap';
+  link.state = 'connecting';
+  renderLink();
+  if (!device._hrvBound) {
+    device._hrvBound = true;
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+  }
+  const server = await device.gatt.connect();
+  const service = await server.getPrimaryService('heart_rate');
+  const ch = await service.getCharacteristic('heart_rate_measurement');
+  // The same characteristic object can come back after a reconnect; adding the
+  // same function again is ignored, so beats are never counted twice.
+  ch.addEventListener('characteristicvaluechanged', onMeasurement);
+  await ch.startNotifications();
+  link.retry = 0;
+  link.state = 'streaming';
+  renderLink();
+}
+
+function onMeasurement(ev) {
+  const m = Engine.parseHeartRate(ev.target.value);
+  if (!m) return;
+  const t = now();
+  heartRate = m.hr;
+  for (const rr of m.rrs) onRR(rr, t);
+}
+
+function onDisconnected() {
+  if (link.state === 'demo') return;
+  heartRate = 0;
+  link.state = 'lost';
+  renderLink();
+  clearTimeout(link.retryTimer);
+  const wait = [1, 2, 4, 8, 15][Math.min(link.retry, 4)] * 1000;
+  link.retry += 1;
+  link.retryTimer = setTimeout(async () => {
+    if (link.state !== 'lost' || !link.device) return;
+    try { await attach(link.device); } catch (e) {
+      if (link.retry < 12) onDisconnected();
+      else { link.state = 'lost-final'; renderLink(); }
+    }
+  }, wait);
+}
+
+// Reconnect to a strap this site was allowed to use before (Chrome only).
+async function reconnectKnown() {
+  if (!navigator.bluetooth || !navigator.bluetooth.getDevices) return;
+  try {
+    const devices = await navigator.bluetooth.getDevices();
+    if (!devices.length || link.state !== 'idle') return;
+    await attach(devices[0]);
+  } catch (e) {
+    if (link.state === 'connecting') { link.state = 'idle'; renderLink(); }
+  }
+}
+
+// ---------- Demo heart ----------
+// Beats are generated on their own clock and caught up on each tick, so a
+// throttled background tab still produces a correct beat train.
+
+function startDemo() {
+  if (link.device && link.device.gatt && link.device.gatt.connected) link.device.gatt.disconnect();
+  link.device = null;
+  clearAnalysis();
+  const sim = new Engine.HeartSimulator();
+  const d = { sim, beatAt: now() + 0.5, pending: null, timer: 0 };
+  d.timer = setInterval(() => {
+    const t = now();
+    while (d.beatAt <= t) {
+      if (d.pending !== null) {
+        heartRate = Math.round(60 / d.pending);
+        onRR(d.pending, d.beatAt);
+      }
+      d.pending = sim.nextRR(pacer, d.beatAt);
+      d.beatAt += d.pending;
+    }
+  }, 100);
+  link.demo = d;
+  link.state = 'demo';
+  renderLink();
+}
+
+function stopDemo() {
+  if (!link.demo) return;
+  clearInterval(link.demo.timer);
+  link.demo = null;
+}
+
+// ---------- Orb ----------
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const orbs = {
+  big: { el: $('orb'), d: 0 },
+  small: { el: $('orbSmall'), d: 132 },
+};
+let shownEnv = 0;
+
+function sizeOrb(o, d) {
+  o.d = d;
+  const box = d + 18, c = box / 2, r = d / 2;
+  o.el.setAttribute('width', box);
+  o.el.setAttribute('height', box);
+  o.el.setAttribute('viewBox', `0 0 ${box} ${box}`);
+  for (const sel of ['.track', '.arc', '.disc']) {
+    const e = o.el.querySelector(sel);
+    e.setAttribute('cx', c);
+    e.setAttribute('cy', c);
+  }
+  o.el.querySelector('.track').setAttribute('r', r);
+  const arc = o.el.querySelector('.arc');
+  arc.setAttribute('r', r);
+  arc.setAttribute('transform', `rotate(-90 ${c} ${c})`);
+  o.circ = 2 * Math.PI * r;
+  arc.setAttribute('stroke-dasharray', `0 ${o.circ}`);
+  drawTicksFor(o);
+}
+
+// Hairline marks at each phase boundary, plus a brighter one at the top of the cycle.
+function drawTicksFor(o) {
+  const g = o.el.querySelector('.ticks');
+  g.replaceChildren();
+  if (!o.d) return;
+  const box = o.d + 18, c = box / 2, r = o.d / 2, p = pacer.period;
+  const mark = (frac, len, opacity, width) => {
+    const a = frac * 2 * Math.PI - Math.PI / 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const l = document.createElementNS(SVGNS, 'line');
+    l.setAttribute('class', 'tick');
+    l.setAttribute('x1', c + ca * (r - len));
+    l.setAttribute('y1', c + sa * (r - len));
+    l.setAttribute('x2', c + ca * (r + len));
+    l.setAttribute('y2', c + sa * (r + len));
+    l.setAttribute('stroke-opacity', opacity);
+    l.setAttribute('stroke-width', width);
+    g.appendChild(l);
+  };
+  let acc = 0;
+  for (const dur of [pacer.inhaleSec, pacer.holdSec, pacer.exhaleSec]) {
+    if (dur <= 0.001) continue;
+    acc += dur;
+    if (acc < p - 0.001) mark(acc / p, 4, 0.28, 1);
+  }
+  mark(0, 6, 0.5, 1.5);
+}
+
+function drawTicks() {
+  drawTicksFor(orbs.big);
+  drawTicksFor(orbs.small);
+}
+
+function paintOrb(o, env, progress, tint) {
+  if (!o.d) return;
+  o.el.querySelector('.disc').setAttribute('r', o.d * (0.26 + 0.56 * env) / 2);
+  const arc = o.el.querySelector('.arc');
+  const len = Math.max(0.0005, progress) * o.circ;
+  arc.setAttribute('stroke-dasharray', `${len} ${o.circ}`);
+  if (o.tint !== tint) {
+    o.el.querySelector('.disc').style.fill = tint;
+    arc.style.stroke = tint;
+    o.tint = tint;
+  }
+}
+
+// The orb takes the space left after the fixed furniture, capped at 420.
+function layoutBreathe() {
+  const sec = $('breathe');
+  const w = sec.clientWidth, h = sec.clientHeight;
+  if (!w || !h) return;
+  const avail = Math.min(w * 0.62, h - 250);
+  const d = Math.round(Math.max(180, Math.min(420, avail)));
+  if (d !== orbs.big.d) sizeOrb(orbs.big, d);
+}
+
+// ---------- Rendering ----------
+
+let mode = 'breathe';
+let lastSeg = '';
+
+function frame() {
+  const t = now();
+  let env = pacer.envelope(t);
+  if (blend) {
+    const k = (t - (blend.until - 0.5)) / 0.5;
+    if (k >= 1) blend = null;
+    else env = blend.from + (env - blend.from) * (1 - Math.pow(1 - Math.max(0, k), 3));
+  }
+  shownEnv = env;
+  const ph = pacer.phase(t);
+  const tint = TINT[ph.segment];
+
+  if (mode === 'breathe') {
+    paintOrb(orbs.big, env, ph.phase, tint);
+    if (ph.segment !== lastSeg) {
+      const seg = $('seg');
+      seg.textContent = ph.segment;
+      seg.classList.remove('swap');
+      void seg.offsetWidth;
+      seg.classList.add('swap');
+    }
+    $('rem').textContent = fmt.one(pacer.remaining(t));
+  } else {
+    paintOrb(orbs.small, env, ph.phase, tint);
+    if (ph.segment !== lastSeg) {
+      $('ppSeg').textContent = ph.segment;
+      $('ppSeg').style.color = tint;
+    }
+  }
+  lastSeg = ph.segment;
+  renderTimer(t);
+}
+
+function loop() {
+  frame();
+  requestAnimationFrame(loop);
+}
+
+let lastTitle = '';
+function renderTimer(t) {
+  if (timer.running && timer.done(t)) finishSession();
+  const done = timer.done(t);
+  const el = $('timer');
+  el.classList.toggle('running', timer.running);
+  el.classList.toggle('done', done);
+  const clock = fmt.clock(timer.remaining(t));
+  $('clock').textContent = clock;
+  $('progFill').style.width = `${58 * timer.progress(t)}px`;
+  const icon = timer.running ? 'pause' : 'play';
+  if ($('playIcon').dataset.icon !== icon) {
+    $('playIcon').dataset.icon = icon;
+    $('playIcon').innerHTML = icon === 'play'
+      ? '<path d="M.1 1.6c0-.8.85-1.3 1.55-.88l5.6 3.4c.66.4.66 1.36 0 1.76l-5.6 3.4c-.7.42-1.55-.08-1.55-.88z"/>'
+      : '<rect x=".2" y="1.5" width="2.6" height="8" rx=".7"/><rect x="4.6" y="1.5" width="2.6" height="8" rx=".7"/>';
+    $('playBtn').setAttribute('aria-label', timer.running ? 'Pause session' : 'Start session');
+    $('playBtn').title = timer.running ? 'Pause session (space)' : 'Start session (space)';
+  }
+  const title = timer.running ? `${clock} · HRV Tuner` : (done ? 'Done · HRV Tuner' : 'HRV Tuner');
+  if (title !== lastTitle) { document.title = title; lastTitle = title; }
+}
+
+function renderPacerText() {
+  $('hdrRate').textContent = `${fmt.two(pacer.bpm)} bpm`;
+  $('hdrTiming').textContent = fmt.timings(pacer);
+  $('ppRate').textContent = `${fmt.two(pacer.bpm)} bpm`;
+  $('ppTiming').textContent = fmt.timings(pacer);
+  $('rateVal').textContent = fmt.one(settings.bpm);
+  for (const b of $('ratioChoice').children) b.classList.toggle('on', b.dataset.v === settings.ratio);
+  for (const b of $('toneChoice').children) b.classList.toggle('on', b.dataset.v === settings.tone);
+  const v = Math.round(settings.volume * 100);
+  $('vol').value = v;
+  $('vol').style.setProperty('--p', `${v}%`);
+  $('volVal').textContent = v;
+  $('targetLabel').textContent = `${settings.target / 60}m`;
+  $('targetSel').value = String(settings.target);
+}
+
+function cohColor(s) {
+  if (!s.ok) return 'var(--text3)';
+  if (s.coherence < 0.40) return 'var(--bad)';
+  if (s.coherence < 0.65) return 'var(--warn)';
+  if (s.coherence < 0.85) return 'var(--good)';
+  return 'var(--inhale)';
+}
+
+// Changed digits roll up and fade, like SwiftUI's numeric text transition.
+let shownNum = '';
+function setCohNumber(text) {
+  const el = $('cohNum');
+  if (text === shownNum) return;
+  const prev = shownNum;
+  shownNum = text;
+  const animate = prev !== '' && document.visibilityState === 'visible';
+  const chars = [...text], old = [...prev];
+  el.replaceChildren();
+  chars.forEach((c, i) => {
+    const span = document.createElement('span');
+    span.className = 'ch';
+    span.textContent = c;
+    const o = old[old.length - chars.length + i];
+    if (animate && o !== c) {
+      span.classList.add('in');
+      if (o !== undefined) {
+        const out = document.createElement('span');
+        out.className = 'out';
+        out.textContent = o;
+        out.setAttribute('aria-hidden', 'true');
+        out.addEventListener('animationend', () => out.remove());
+        span.appendChild(out);
+      }
+    }
+    el.appendChild(span);
+  });
+}
+
+function updateCohHint() {
+  const s = coh.snap;
+  const strap = link.state === 'streaming' || link.state === 'demo' || link.state === 'lost';
+  const hint = $('cohHint');
+  hint.textContent = strap ? 'collecting beats…' : (link.state === 'unsupported' ? 'no heart strap' : 'connect a heart strap');
+  hint.style.opacity = s.ok ? 0 : 1;
+}
+
+function renderCoherence() {
+  const s = coh.snap;
+  setCohNumber(s.ok ? fmt.pct(s.coherence) : '—');
+  const color = cohColor(s);
+  $('cohNum').style.color = color;
+  const fill = $('cohFill');
+  fill.style.width = `${232 * (s.ok ? Math.max(0.004, s.coherence) : 0)}px`;
+  fill.style.backgroundColor = color;
+  updateCohHint();
+}
+
+function renderMetrics() {
+  const s = coh.snap;
+  $('mCoh').textContent = s.ok ? `${fmt.pct(s.coherence)}%` : '—';
+  $('mRsa').textContent = s.rsaAmplitudeBpm > 0 ? `${fmt.one(s.rsaAmplitudeBpm)} bpm` : '—';
+  $('mPeak').textContent = s.ok ? `${fmt.two(s.peakBpm)} br/min` : '—';
+  $('mLock').textContent = s.hasTarget ? `${fmt.pct(s.lock)}%` : '—';
+  $('mPhase').textContent = s.hasPhase && s.phaseTracking >= 0.3
+    ? `${s.phaseLagDeg >= 0 ? '+' : ''}${s.phaseLagDeg.toFixed(0)}°` : '—';
+  $('mHr').textContent = heartRate > 0 ? `${heartRate} bpm` : '—';
+  $('mRmssd').textContent = hrv.sampleCount >= 4 ? `${hrv.rmssd.toFixed(0)} ms` : '—';
+  $('mSdnn').textContent = hrv.sampleCount >= 4 ? `${hrv.sdnn.toFixed(0)} ms` : '—';
+}
+
+// ---------- Charts ----------
+
+function niceStep(span, count) {
+  const raw = span / count;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= raw) return m * p;
+  return 10 * p;
+}
+
+// Monotone cubic (Fritsch–Carlson) through the points, the same curve family
+// as Swift Charts' .monotone interpolation.
+function monotonePath(ctx, pts, move = true) {
+  const n = pts.length;
+  if (n === 0) return;
+  if (move) ctx.moveTo(pts[0][0], pts[0][1]); else ctx.lineTo(pts[0][0], pts[0][1]);
+  if (n === 1) return;
+  const dx = [], dy = [], m = [], tan = new Array(n);
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = pts[i + 1][0] - pts[i][0];
+    dy[i] = pts[i + 1][1] - pts[i][1];
+    m[i] = dx[i] ? dy[i] / dx[i] : 0;
+  }
+  tan[0] = m[0];
+  tan[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) tan[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) { tan[i] = 0; tan[i + 1] = 0; continue; }
+    const a = tan[i] / m[i], b = tan[i + 1] / m[i], h = a * a + b * b;
+    if (h > 9) { const k = 3 / Math.sqrt(h); tan[i] = k * a * m[i]; tan[i + 1] = k * b * m[i]; }
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const h = dx[i] / 3;
+    ctx.bezierCurveTo(pts[i][0] + h, pts[i][1] + h * tan[i], pts[i + 1][0] - h, pts[i + 1][1] - h * tan[i + 1], pts[i + 1][0], pts[i + 1][1]);
+  }
+}
+
+function prepCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+  }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+// Plot frame shared by both charts: y labels on the right, time labels below.
+function drawFrame(ctx, w, h, x0, x1, y0, y1, yTicks, xTicks, xFmt, yFmt) {
+  const plot = { l: 0, r: w - 26, t: 4, b: h - 17 };
+  const X = x => plot.l + (x - x0) / (x1 - x0) * (plot.r - plot.l);
+  const Y = y => plot.b - (y - y0) / (y1 - y0) * (plot.b - plot.t);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(255,255,255,.045)';
+  ctx.fillStyle = '#565C6B';
+  ctx.font = '9px ' + getComputedStyle(document.body).getPropertyValue('--ui');
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  for (const v of yTicks) {
+    const y = Math.round(Y(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(plot.l, y); ctx.lineTo(plot.r, y); ctx.stroke();
+    ctx.fillText(yFmt(v), plot.r + 5, y);
+  }
+  ctx.textBaseline = 'alphabetic';
+  for (const v of xTicks) {
+    const x = Math.round(X(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(x, plot.t); ctx.lineTo(x, plot.b); ctx.stroke();
+    if (x + 40 < w) ctx.fillText(xFmt(v), x + 3, h - 4);
+  }
+  return { plot, X, Y };
+}
+
+const timeFmtSec = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+const timeFmtMin = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+
+function drawHRChart() {
+  const { ctx, w, h } = prepCanvas($('chartHR'));
+  const pts = coh.overlay;
+  const end = pts.length ? pts[pts.length - 1].t : now();
+  const x0 = end - 60, x1 = end;
+  let lo = 60, hi = 70;
+  if (pts.length) {
+    lo = Infinity; hi = -Infinity;
+    for (const p of pts) { if (p.hr < lo) lo = p.hr; if (p.hr > hi) hi = p.hr; }
+  }
+  const span = Math.max(hi - lo, 6), mid = (hi + lo) / 2;
+  const y0 = mid - span / 2 - 1.5, y1 = mid + span / 2 + 1.5;
+  const step = niceStep(y1 - y0, 4);
+  const yTicks = [];
+  for (let v = Math.ceil(y0 / step) * step; v <= y1; v += step) yTicks.push(v);
+  const xTicks = [];
+  for (let v = Math.ceil(x0 / 15) * 15; v <= x1; v += 15) xTicks.push(v);
+  const { plot, X, Y } = drawFrame(ctx, w, h, x0, x1, y0, y1, yTicks, xTicks,
+    v => timeFmtSec.format(new Date(v * 1000)), v => String(Math.round(v)));
+  if (!pts.length) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.l, plot.t, plot.r - plot.l, plot.b - plot.t);
+  ctx.clip();
+  if (pts[0].breath !== null) {
+    const bp = pts.map(p => [X(p.t), Y(y0 + p.breath * (y1 - y0))]);
+    ctx.beginPath();
+    ctx.moveTo(bp[0][0], plot.b);
+    monotonePath(ctx, bp, false);
+    ctx.lineTo(bp[bp.length - 1][0], plot.b);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(90,200,224,.11)';
+    ctx.fill();
+  }
+  ctx.beginPath();
+  monotonePath(ctx, pts.map(p => [X(p.t), Y(p.hr)]));
+  ctx.strokeStyle = '#E57173';
+  ctx.lineWidth = 1.8;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawCohChart() {
+  const { ctx, w, h } = prepCanvas($('chartCoh'));
+  const hist = coh.history;
+  const end = hist.length ? hist[hist.length - 1].t : now();
+  const first = hist.length ? hist[0].t : end - 60;
+  const x0 = Math.min(first, end - 60), x1 = end;
+  const xStep = niceStep(x1 - x0, 4) >= 60 ? Math.ceil(niceStep(x1 - x0, 4) / 60) * 60 : 15;
+  const xTicks = [];
+  for (let v = Math.ceil(x0 / xStep) * xStep; v <= x1; v += xStep) xTicks.push(v);
+  const { plot, X, Y } = drawFrame(ctx, w, h, x0, x1, 0, 1, [0, 0.5, 1], xTicks,
+    v => (xStep >= 60 ? timeFmtMin : timeFmtSec).format(new Date(v * 1000)), v => (v === 0 ? '0' : v.toFixed(1)));
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(plot.l, plot.t - 1, plot.r - plot.l, plot.b - plot.t + 2);
+  ctx.clip();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = 'rgba(113,215,157,.35)';
+  ctx.lineWidth = 1;
+  const yt = Math.round(Y(0.85)) + 0.5;
+  ctx.beginPath(); ctx.moveTo(plot.l, yt); ctx.lineTo(plot.r, yt); ctx.stroke();
+  ctx.setLineDash([]);
+  if (hist.length > 1) {
+    const pts = hist.map(p => [X(p.t), Y(p.coherence)]);
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], plot.b);
+    monotonePath(ctx, pts, false);
+    ctx.lineTo(pts[pts.length - 1][0], plot.b);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(90,200,224,.13)';
+    ctx.fill();
+    ctx.beginPath();
+    monotonePath(ctx, pts);
+    ctx.strokeStyle = '#5AC8E0';
+    ctx.lineWidth = 1.8;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---------- Once a second: analysis + numbers ----------
+
+function tick() {
+  coh.recompute(now());
+  renderCoherence();
+  if (mode === 'analyze') {
+    renderMetrics();
+    drawHRChart();
+    drawCohChart();
+  }
+  if (document.visibilityState !== 'visible') renderTimer(now());
+}
+
+// ---------- Wiring ----------
+
+function setMode(m) {
+  mode = m;
+  for (const b of document.querySelectorAll('.modes button')) b.classList.toggle('on', b.dataset.mode === m);
+  $('breathe').hidden = m !== 'breathe';
+  $('analyze').hidden = m !== 'analyze';
+  lastSeg = '';
+  if (m === 'breathe') layoutBreathe();
+  else { renderMetrics(); drawHRChart(); drawCohChart(); }
+  frame();
+}
+
+for (const b of document.querySelectorAll('.modes button')) b.addEventListener('click', () => setMode(b.dataset.mode));
+
+$('playBtn').addEventListener('click', () => { sound.init(); toggleSession(); });
+document.addEventListener('pointerup', e => {
+  const b = e.target.closest && e.target.closest('button');
+  if (b && e.pointerType === 'mouse') setTimeout(() => b.blur(), 0);
+});
+document.addEventListener('keydown', e => {
+  if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = e.target && e.target.tagName;
+  if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+  if (e.code === 'Space' || e.key === 'Enter') {
+    if (tag === 'BUTTON') return;
+    e.preventDefault();
+    sound.init();
+    toggleSession();
+  }
+});
+
+$('targetSel').addEventListener('change', e => {
+  const v = e.target.value;
+  if (v !== 'reset') {
+    settings.target = Number(v);
+    saveSettings();
+  }
+  resetSession();
+  renderPacerText();
+  e.target.blur();
+});
+
+$('connectBtn').addEventListener('click', connectStrap);
+$('demoBtn').addEventListener('click', startDemo);
+
+function changeRate(delta) {
+  settings.bpm = Math.round(Math.min(8, Math.max(3, settings.bpm + delta)) * 10) / 10;
+  saveSettings();
+  applyPacerShape();
+}
+$('rateDown').addEventListener('click', () => changeRate(-0.1));
+$('rateUp').addEventListener('click', () => changeRate(0.1));
+for (const b of $('ratioChoice').children) b.addEventListener('click', () => {
+  settings.ratio = b.dataset.v;
+  saveSettings();
+  applyPacerShape();
+});
+for (const b of $('toneChoice').children) b.addEventListener('click', () => {
+  settings.tone = b.dataset.v;
+  saveSettings();
+  sound.setTone();
+  renderPacerText();
+});
+$('vol').addEventListener('input', e => {
+  settings.volume = Number(e.target.value) / 100;
+  saveSettings();
+  sound.setVolume(settings.volume);
+  renderPacerText();
+});
+$('resetDefaults').addEventListener('click', () => {
+  settings.bpm = DEFAULTS.bpm;
+  settings.ratio = DEFAULTS.ratio;
+  settings.tone = DEFAULTS.tone;
+  settings.volume = DEFAULTS.volume;
+  saveSettings();
+  sound.setVolume(settings.volume);
+  applyPacerShape();
+});
+
+window.addEventListener('resize', () => {
+  layoutBreathe();
+  if (mode === 'analyze') { drawHRChart(); drawCohChart(); }
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && timer.running) holdScreenOn(true);
+});
+
+function detectFonts() {
+  const width = family => {
+    const s = document.createElement('span');
+    s.textContent = '0123456789';
+    s.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;font:600 40px ${family}, monospace`;
+    document.body.appendChild(s);
+    const w = s.getBoundingClientRect().width;
+    s.remove();
+    return w;
+  };
+  const base = width('monospace');
+  const native = width('ui-rounded') !== base;
+  const installed = width('"SF Pro Rounded"') !== base;
+  document.documentElement.classList.toggle('native-rounded', native);
+  document.documentElement.classList.toggle('sf-rounded', !native && installed);
+}
+detectFonts();
+if (document.fonts) document.fonts.ready.then(detectFonts);
+
+sizeOrb(orbs.small, 132);
+layoutBreathe();
+renderPacerText();
+renderCoherence();
+renderTimer(now());
+
+if (!('bluetooth' in navigator)) link.state = 'unsupported';
+renderLink();
+if (new URLSearchParams(location.search).has('demo')) startDemo();
+else reconnectKnown();
+
+setInterval(tick, 1000);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
