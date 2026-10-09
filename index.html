@@ -57,7 +57,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 1px s
 
 .sf-rounded .num { letter-spacing: .5px; }
 .sf-rounded .coh-num { letter-spacing: .34px; }
-.sf-rounded .phase .rem { position: relative; top: 1px; }
+.sf-rounded .phase .count { position: relative; top: 1px; }
 
 /* ---------- Header ---------- */
 
@@ -158,16 +158,18 @@ main { flex: 1; min-height: 0; position: relative; }
 }
 .grow { flex: 1 1 0; min-height: 8px; }
 .orb { display: block; flex: none; overflow: visible; }
-.orb .track { fill: none; stroke: rgba(255, 255, 255, .08); stroke-width: 1; }
-.orb .arc { fill: none; stroke-width: 2; stroke-opacity: .5; stroke-linecap: butt; transition: stroke .8s ease-in-out; }
-.orb .disc { transition: fill .8s ease-in-out; }
-.orb .tick { stroke: #fff; stroke-linecap: butt; }
+.orb .track { fill: none; stroke: rgba(255, 255, 255, .07); }
+.orb .arc, .orb .ghost { fill: none; stroke-linecap: round; }
+.orb .arc { stroke: var(--inhale); stroke-opacity: .85; transition: stroke .8s ease-in-out; }
+.orb .ghost { stroke-opacity: 0; }
+.orb .ghost.fade { animation: ghost-fade .7s ease-out both; }
+@keyframes ghost-fade { from { stroke-opacity: .85; } to { stroke-opacity: 0; } }
+.orb .notch { stroke: rgba(255, 255, 255, .35); stroke-width: 1.5; stroke-linecap: butt; }
+.orb .disc { fill: var(--inhale); transition: fill .8s ease-in-out; }
 
-.phase { display: flex; align-items: center; gap: 12px; margin-top: 14px; height: 17px; flex: none; }
-.phase .seg { font-size: 14px; font-weight: 500; letter-spacing: 3.4px; text-transform: uppercase; color: var(--text); }
-.phase .seg.swap { animation: fadein .4s ease-in-out; }
-.phase .rem { font-size: 14px; color: var(--text3); }
-@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+.phase { display: flex; align-items: center; gap: 12px; margin-top: 14px; height: 20px; flex: none; }
+.phase .seg { font-size: 14px; font-weight: 500; letter-spacing: 3.4px; color: var(--text); }
+.phase .count { min-width: 10px; font-size: 16px; font-weight: 600; transition: color .8s ease-in-out; }
 
 .coh { display: flex; flex-direction: column; align-items: center; padding-bottom: 22px; flex: none; }
 .coh-num {
@@ -180,12 +182,18 @@ main { flex: 1; min-height: 0; position: relative; }
   transition: color .4s ease-out;
   white-space: nowrap;
 }
-.coh-num .ch { display: inline-block; position: relative; }
-.coh-num .ch.in { animation: roll-in .4s ease-out both; }
-.coh-num .ch .out {
+/* Text that changes rolls like SwiftUI's numeric text: the old characters slide
+   up and fade out while the new ones rise in. Used by the coherence number and
+   the pacer's phase word and countdown. */
+.roll .ch { display: inline-block; position: relative; }
+.roll .ch.in { animation: roll-in .4s ease-out both; }
+.roll .ch .out {
   position: absolute;
   left: 0;
+  right: 0;
   top: 0;
+  text-align: center;
+  white-space: nowrap;
   animation: roll-out .4s ease-out both;
   pointer-events: none;
 }
@@ -359,17 +367,18 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
       <div class="grow"></div>
       <svg class="orb" id="orb" aria-hidden="true">
         <circle class="track"></circle>
-        <g class="ticks"></g>
+        <circle class="ghost"></circle>
         <circle class="arc"></circle>
+        <g class="notches"></g>
         <circle class="disc"></circle>
       </svg>
       <div class="phase">
-        <span class="seg" id="seg">Inhale</span>
-        <span class="rem num" id="rem">0.0</span>
+        <span class="seg roll" id="seg"></span>
+        <span class="count roll num" id="count"></span>
       </div>
       <div class="grow"></div>
       <div class="coh">
-        <div class="coh-num num" id="cohNum"></div>
+        <div class="coh-num roll num" id="cohNum"></div>
         <div class="field-label">Coherence</div>
         <div class="meter">
           <div class="trk"></div>
@@ -386,8 +395,9 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
           <div class="panel pacer-panel">
             <svg class="orb" id="orbSmall" aria-hidden="true">
               <circle class="track"></circle>
-              <g class="ticks"></g>
+              <circle class="ghost"></circle>
               <circle class="arc"></circle>
+              <g class="notches"></g>
               <circle class="disc"></circle>
             </svg>
             <div class="seg" id="ppSeg">Inhale</div>
@@ -1474,67 +1484,107 @@ const orbs = {
 };
 let shownEnv = 0;
 
+// The ring is the coherence meter bent into a circle: same thickness (10 at
+// full size), same 7% white track, same 85% fill with rounded ends.
+function ringWidth(d) {
+  return Math.max(4, Math.round(d * 10 / 420));
+}
+
 function sizeOrb(o, d) {
   o.d = d;
+  o.w = ringWidth(d);
   const box = d + 18, c = box / 2, r = d / 2;
   o.el.setAttribute('width', box);
   o.el.setAttribute('height', box);
   o.el.setAttribute('viewBox', `0 0 ${box} ${box}`);
-  for (const sel of ['.track', '.arc', '.disc']) {
+  for (const sel of ['.track', '.ghost', '.arc', '.disc']) {
     const e = o.el.querySelector(sel);
     e.setAttribute('cx', c);
     e.setAttribute('cy', c);
   }
-  o.el.querySelector('.track').setAttribute('r', r);
-  const arc = o.el.querySelector('.arc');
-  arc.setAttribute('r', r);
-  arc.setAttribute('transform', `rotate(-90 ${c} ${c})`);
+  for (const sel of ['.track', '.ghost', '.arc']) {
+    const e = o.el.querySelector(sel);
+    e.setAttribute('r', r);
+    e.setAttribute('stroke-width', o.w);
+  }
   o.circ = 2 * Math.PI * r;
-  arc.setAttribute('stroke-dasharray', `0 ${o.circ}`);
-  drawTicksFor(o);
+  for (const sel of ['.ghost', '.arc']) {
+    o.el.querySelector(sel).setAttribute('transform', `rotate(-90 ${c} ${c})`);
+  }
+  o.el.querySelector('.arc').setAttribute('stroke-dasharray', `0 ${o.circ}`);
+  o.el.querySelector('.ghost').setAttribute('stroke-dasharray', `${o.circ} ${o.circ}`);
+  drawNotchesFor(o);
 }
 
-// Hairline marks at each phase boundary, plus a brighter one at the top of the cycle.
-function drawTicksFor(o) {
-  const g = o.el.querySelector('.ticks');
+// White notches where the breath turns, like the 85 notch on the coherence meter.
+function drawNotchesFor(o) {
+  const g = o.el.querySelector('.notches');
   g.replaceChildren();
   if (!o.d) return;
-  const box = o.d + 18, c = box / 2, r = o.d / 2, p = pacer.period;
-  const mark = (frac, len, opacity, width) => {
-    const a = frac * 2 * Math.PI - Math.PI / 2;
-    const ca = Math.cos(a), sa = Math.sin(a);
-    const l = document.createElementNS(SVGNS, 'line');
-    l.setAttribute('class', 'tick');
-    l.setAttribute('x1', c + ca * (r - len));
-    l.setAttribute('y1', c + sa * (r - len));
-    l.setAttribute('x2', c + ca * (r + len));
-    l.setAttribute('y2', c + sa * (r + len));
-    l.setAttribute('stroke-opacity', opacity);
-    l.setAttribute('stroke-width', width);
-    g.appendChild(l);
-  };
+  const box = o.d + 18, c = box / 2, r = o.d / 2, half = o.w / 2, p = pacer.period;
+  const fracs = [0];
   let acc = 0;
   for (const dur of [pacer.inhaleSec, pacer.holdSec, pacer.exhaleSec]) {
     if (dur <= 0.001) continue;
     acc += dur;
-    if (acc < p - 0.001) mark(acc / p, 4, 0.28, 1);
+    if (acc < p - 0.001) fracs.push(acc / p);
   }
-  mark(0, 6, 0.5, 1.5);
+  for (const f of fracs) {
+    const a = f * 2 * Math.PI - Math.PI / 2;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const l = document.createElementNS(SVGNS, 'line');
+    l.setAttribute('class', 'notch');
+    l.setAttribute('x1', c + ca * (r - half));
+    l.setAttribute('y1', c + sa * (r - half));
+    l.setAttribute('x2', c + ca * (r + half));
+    l.setAttribute('y2', c + sa * (r + half));
+    g.appendChild(l);
+  }
 }
 
 function drawTicks() {
-  drawTicksFor(orbs.big);
-  drawTicksFor(orbs.small);
+  drawNotchesFor(orbs.big);
+  drawNotchesFor(orbs.small);
 }
 
-function paintOrb(o, env, progress, tint) {
+// A small spring bounce of the disc each time the breath turns around
+// (top and bottom of the breath). Under-damped, so it settles in about 0.6 s.
+const reducedMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+const pop = { x: 1, v: 0, t: 0 };
+
+function kickPop() {
+  if (!reducedMotion) pop.v += 1.2;
+}
+
+function stepPop(t) {
+  const dt = pop.t ? Math.min(1 / 30, Math.max(0, t - pop.t)) : 0;
+  pop.t = t;
+  const h = dt / 4;
+  for (let i = 0; i < 4; i++) {
+    const a = -220 * (pop.x - 1) - 14 * pop.v;
+    pop.v += a * h;
+    pop.x += pop.v * h;
+  }
+  return pop.x;
+}
+
+function paintOrb(o, env, progress, tint, scale) {
   if (!o.d) return;
-  o.el.querySelector('.disc').setAttribute('r', o.d * (0.26 + 0.56 * env) / 2);
+  const disc = o.el.querySelector('.disc');
+  disc.setAttribute('r', o.d * (0.26 + 0.56 * env) / 2 * scale);
   const arc = o.el.querySelector('.arc');
-  const len = Math.max(0.0005, progress) * o.circ;
-  arc.setAttribute('stroke-dasharray', `${len} ${o.circ}`);
+  // When a cycle completes, the full ring fades out while the next one starts from the top.
+  if (o.lastProgress !== undefined && progress < o.lastProgress - 0.5 && !reducedMotion) {
+    const ghost = o.el.querySelector('.ghost');
+    ghost.style.stroke = o.tint;
+    ghost.classList.remove('fade');
+    void ghost.getBoundingClientRect();
+    ghost.classList.add('fade');
+  }
+  o.lastProgress = progress;
+  arc.setAttribute('stroke-dasharray', `${progress * o.circ} ${o.circ}`);
   if (o.tint !== tint) {
-    o.el.querySelector('.disc').style.fill = tint;
+    disc.style.fill = tint;
     arc.style.stroke = tint;
     o.tint = tint;
   }
@@ -1566,19 +1616,20 @@ function frame() {
   shownEnv = env;
   const ph = pacer.phase(t);
   const tint = TINT[ph.segment];
+  if (lastSeg !== '' && ph.segment !== lastSeg) kickPop();
+  const scale = stepPop(t);
 
   if (mode === 'breathe') {
-    paintOrb(orbs.big, env, ph.phase, tint);
-    if (ph.segment !== lastSeg) {
-      const seg = $('seg');
-      seg.textContent = ph.segment;
-      seg.classList.remove('swap');
-      void seg.offsetWidth;
-      seg.classList.add('swap');
+    paintOrb(orbs.big, env, ph.phase, tint, scale);
+    rollText($('seg'), ph.segment.toUpperCase(), { whole: true });
+    // Whole seconds left in this part of the breath, counting down to 1.
+    rollText($('count'), String(Math.max(1, Math.ceil(pacer.remaining(t) - 1e-6))));
+    if ($('count').dataset.tint !== tint) {
+      $('count').style.color = tint;
+      $('count').dataset.tint = tint;
     }
-    $('rem').textContent = fmt.one(pacer.remaining(t));
   } else {
-    paintOrb(orbs.small, env, ph.phase, tint);
+    paintOrb(orbs.small, env, ph.phase, tint, scale);
     if (ph.segment !== lastSeg) {
       $('ppSeg').textContent = ph.segment;
       $('ppSeg').style.color = tint;
@@ -1640,21 +1691,21 @@ function cohColor(s) {
   return 'var(--inhale)';
 }
 
-// Changed digits roll up and fade, like SwiftUI's numeric text transition.
-let shownNum = '';
-function setCohNumber(text) {
-  const el = $('cohNum');
-  if (text === shownNum) return;
-  const prev = shownNum;
-  shownNum = text;
-  const animate = prev !== '' && document.visibilityState === 'visible';
-  const chars = [...text], old = [...prev];
+// Swap an element's text with the roll transition. Numbers roll per character
+// (only the digits that change move); words roll as a whole.
+function rollText(el, text, { whole = false } = {}) {
+  const prev = el.dataset.text ?? '';
+  if (text === prev) return;
+  el.dataset.text = text;
+  const animate = prev !== '' && !reducedMotion && document.visibilityState === 'visible';
+  const units = whole ? [text] : [...text];
+  const old = whole ? [prev] : [...prev];
   el.replaceChildren();
-  chars.forEach((c, i) => {
+  units.forEach((c, i) => {
     const span = document.createElement('span');
     span.className = 'ch';
     span.textContent = c;
-    const o = old[old.length - chars.length + i];
+    const o = old[old.length - units.length + i];
     if (animate && o !== c) {
       span.classList.add('in');
       if (o !== undefined) {
@@ -1680,7 +1731,7 @@ function updateCohHint() {
 
 function renderCoherence() {
   const s = coh.snap;
-  setCohNumber(s.ok ? fmt.pct(s.coherence) : '—');
+  rollText($('cohNum'), s.ok ? fmt.pct(s.coherence) : '—');
   const color = cohColor(s);
   $('cohNum').style.color = color;
   const fill = $('cohFill');
