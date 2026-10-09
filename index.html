@@ -467,9 +467,9 @@ input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border: 0; bord
 <script id="engine">
 /* ENGINE START */
 // Line-by-line port of the macOS app's analysis code (Spectrum.swift,
-// CoherenceAnalyzer.swift, HRVAnalyzer.swift, PacerConfig.swift,
-// HeartSimulator.swift, BLEManager.swift parsing). Same constants, same order of
-// operations, so the numbers match the desktop app. All times are epoch seconds.
+// CoherenceAnalyzer.swift, HRVAnalyzer.swift, PacerConfig.swift, BLEManager.swift
+// parsing). Same constants, same order of operations, so the numbers match the
+// desktop app. All times are epoch seconds.
 const Engine = (() => {
   'use strict';
 
@@ -935,34 +935,6 @@ const Engine = (() => {
     }
   }
 
-  // ---------- Simulated heart (demo mode) ----------
-
-  // Heart rate follows the pacer envelope: a perfect breather, so coherence
-  // should climb toward 100 and phase toward 0 within about a minute.
-  class HeartSimulator {
-    constructor({ baseHR = 62, ampHR = 7, lagDeg = 0, noiseMs = 3 } = {}) {
-      this.baseHR = baseHR;
-      this.ampHR = ampHR;
-      this.lagDeg = lagDeg;
-      this.noiseSec = noiseMs / 1000.0;
-    }
-
-    // RR for the interval starting at `now`, solved at the interval's midpoint.
-    nextRR(pacer, now, random = Math.random) {
-      let rr = 60.0 / this.baseHR;
-      for (let k = 0; k < 3; k++) {
-        let env = 0.5;
-        if (pacer && pacer.period > 0.5) {
-          const lagSec = this.lagDeg / 360.0 * pacer.period;
-          env = pacer.envelope(now + rr / 2 - lagSec);
-        }
-        rr = 60.0 / Math.max(30.0, this.baseHR + this.ampHR * (2 * env - 1));
-      }
-      const jitter = this.noiseSec > 0 ? (random() * 2 - 1) * this.noiseSec : 0;
-      return Math.min(1.9, Math.max(0.35, rr + jitter));
-    }
-  }
-
   // ---------- Bluetooth Heart Rate Measurement (0x2A37) ----------
 
   // Returns { hr, rrs } with RR in seconds, or null for a short packet.
@@ -995,7 +967,7 @@ const Engine = (() => {
 
   return {
     nextPow2, fft, welch, bandPower, peak, interpolate,
-    Pacer, CoherenceAnalyzer, HRVAnalyzer, HeartSimulator, parseHeartRate, emptySnapshot,
+    Pacer, CoherenceAnalyzer, HRVAnalyzer, parseHeartRate, emptySnapshot,
   };
 })();
 
@@ -1411,6 +1383,57 @@ async function reconnectKnown() {
 }
 
 // ---------- Demo heart ----------
+// A simulated person, so the coherence display can be tried without a strap.
+// Before a session they breathe on their own (low coherence). Once the timer
+// runs they settle onto the pacer over about a minute (coherence climbs into
+// the 90s), and every 2.5 minutes they get distracted for 40 s (it drops back
+// to red/amber) and then recover.
+
+// How settled the person is: 0 = breathing on their own, 1 = locked to the pacer.
+function demoFocus(sessionSec) {
+  if (sessionSec === null) return 0.1;
+  if (sessionSec < 20) return 0.15;
+  if (sessionSec < 80) return 0.15 + 0.85 * (sessionSec - 20) / 60;
+  const e = (sessionSec - 80) % 150;
+  if (e < 50) return 1.0;
+  if (e < 90) return 0.08;
+  return 0.95;
+}
+
+function gaussian() {
+  const u = Math.max(1e-12, Math.random()), v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+class DemoPerson {
+  constructor() {
+    this.focus = 0.1;
+    this.ownPhase = 0;   // their own breathing, about 14 breaths a minute
+    this.drift = 0;      // slow heart-rate wander that isn't from breathing
+    this.last = null;
+  }
+
+  // RR for the interval starting at t (solved at the interval's midpoint).
+  nextRR(pacer, t, sessionSec) {
+    const dt = this.last === null ? 1 : Math.max(0.05, t - this.last);
+    this.last = t;
+    this.focus += (demoFocus(sessionSec) - this.focus) * (1 - Math.exp(-dt / 6));
+    const ownHz = 0.23 + 0.03 * Math.sin(t / 17);
+    this.ownPhase += 2 * Math.PI * ownHz * dt;
+    const tau = 9, sigma = 1.2 + 4.5 * (1 - this.focus);
+    this.drift += -this.drift * dt / tau + sigma * Math.sqrt(2 * dt / tau) * gaussian();
+    let rr = 60 / 64;
+    for (let k = 0; k < 3; k++) {
+      const paced = 2 * pacer.envelope(t + rr / 2) - 1;
+      const own = Math.sin(this.ownPhase + 2 * Math.PI * ownHz * rr / 2);
+      const hr = 64 + 7 * this.focus * paced + 2.5 * (1 - this.focus) * own + this.drift;
+      rr = 60 / Math.max(40, hr);
+    }
+    rr += (Math.random() * 2 - 1) * 0.004;
+    return Math.min(1.9, Math.max(0.35, rr));
+  }
+}
+
 // Beats are generated on their own clock and caught up on each tick, so a
 // throttled background tab still produces a correct beat train.
 
@@ -1418,8 +1441,8 @@ function startDemo() {
   if (link.device && link.device.gatt && link.device.gatt.connected) link.device.gatt.disconnect();
   link.device = null;
   clearAnalysis();
-  const sim = new Engine.HeartSimulator();
-  const d = { sim, beatAt: now() + 0.5, pending: null, timer: 0 };
+  const person = new DemoPerson();
+  const d = { beatAt: now() + 0.5, pending: null, timer: 0 };
   d.timer = setInterval(() => {
     const t = now();
     while (d.beatAt <= t) {
@@ -1427,7 +1450,7 @@ function startDemo() {
         heartRate = Math.round(60 / d.pending);
         onRR(d.pending, d.beatAt);
       }
-      d.pending = sim.nextRR(pacer, d.beatAt);
+      d.pending = person.nextRR(pacer, d.beatAt, timer.running ? timer.elapsed(d.beatAt) : null);
       d.beatAt += d.pending;
     }
   }, 100);
